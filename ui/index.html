@@ -80,10 +80,10 @@
                             <input type="text" class="px-3 py-0 text-left text-sm bg-transparent border-0 ring-0 outline-0 w-full" x-model="pacs.host" />
                           </td>
                           <td>
-                            <input type="text" class="px-3 py-0 text-left text-sm bg-transparent border-0 ring-0 outline-0 w-full" x-model="pacs.port" />
+                            <input type="number" min="1" max="65535" step="1" inputmode="numeric" class="px-3 py-0 text-left text-sm bg-transparent border-0 ring-0 outline-0 w-full" x-model.number="pacs.port" />
                           </td>
                           <td>
-                            <input type="text" class="px-3 py-0 text-left text-sm bg-transparent border-0 ring-0 outline-0 w-full" x-model="pacs.localPort" />
+                            <input type="number" min="1" max="65535" step="1" inputmode="numeric" class="px-3 py-0 text-left text-sm bg-transparent border-0 ring-0 outline-0 w-full" x-model.number="pacs.localPort" />
                           </td>
                           <td class="p-3 text-sm text-center space-x-2">
                             <button type="button" class="font-semibold text-gray-400 hover:text-gray-300 hover:cursor-pointer" @click="runPacsConnect()">
@@ -225,11 +225,25 @@
             }
           },
 
+          parsePortNumber(value, fieldName) {
+            const port = typeof value === 'number' ? value : Number(String(value).trim());
+            if (!Number.isInteger(port) || port < 1 || port > 65535) {
+              console.error(`${fieldName} must be an integer between 1 and 65535`);
+              return null;
+            }
+            return port;
+          },
+
           async runPacsConnect() {
+            const port = this.parsePortNumber(this.pacs.port, 'Port');
+            if (port === null) {
+              return;
+            }
+
             try {
               const connected = await $electron?.api('@pmt/pacs-client/pacsConnect', {
                 host: this.pacs.host,
-                port: this.pacs.port,
+                port,
                 calledAet: this.pacs.aet,
                 callingAet: this.myAet,
                 timeoutSec: this.timeoutSec,
@@ -241,6 +255,11 @@
           },
 
           async runPacsUpload() {
+            const port = this.parsePortNumber(this.pacs.port, 'Port');
+            if (port === null) {
+              return;
+            }
+
             let rootDir = '';
             const { canceled, filePaths: fullPaths } = await $electron.showOpenDialog({
               properties: ['openDirectory'],
@@ -273,7 +292,7 @@
             try {
               const res = await $electron?.api('@pmt/pacs-client/pacsUpload', {
                 host: this.pacs.host,
-                port: this.pacs.port,
+                port,
                 calledAet: this.pacs.aet,
                 callingAet: this.myAet,
                 timeoutSec: this.timeoutSec,
@@ -303,6 +322,10 @@
 
             const level = this.searchLevel;
             const queryModel = level === 'PATIENT' ? 'P' : 'S';
+            const port = this.parsePortNumber(this.pacs.port, 'Port');
+            if (port === null) {
+              return;
+            }
             const keys = this.searchKeys.map((key, index) => {
               if (!key.trim()) {
                 return null;
@@ -314,7 +337,7 @@
             try {
               const params = {
                 host: this.pacs.host,
-                port: this.pacs.port,
+                port,
                 calledAet: this.pacs.aet,
                 callingAet: this.myAet,
                 timeoutSec: this.timeoutSec,
@@ -369,11 +392,21 @@
               return;
             }
 
+            const port = this.parsePortNumber(this.pacs.port, 'Port');
+            if (port === null) {
+              return;
+            }
+
+            const localPort = this.parsePortNumber(this.pacs.localPort, 'Local Port');
+            if (localPort === null) {
+              return;
+            }
+
             try {
               const res = await $electron?.api('@pmt/pacs-client/pacsDownload', {
                 host: this.pacs.host,
-                port: this.pacs.port,
-                localPort: this.pacs.localPort,
+                port,
+                localPort,
                 calledAet: this.pacs.aet,
                 callingAet: this.myAet,
                 timeoutSec: this.timeoutSec,
