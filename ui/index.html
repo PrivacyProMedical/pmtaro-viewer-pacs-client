@@ -125,25 +125,27 @@
           <div class="relative">
             <hr class="absolute inset-x-3 -top-2.5 border-white/15" />
           </div>
-          <div class="flex-none flex items-center p-3 py-2 pt-0">
-            <fieldset class="flex items-center text-sm text-slate-400">
-              <legend class="float-left mr-3">Level:</legend>
-              <label class="inline-flex items-center mr-2">
-                <input class="text-blue-500 border-0 ring-0 outline-0" type="radio" name="level" x-model="searchLevel" @change="setSearchLevel($event.target.value)" value="PATIENT" />
-                <span class="ml-1" :class="searchLevel === 'PATIENT' ? 'text-white' : ''">Patient</span>
-              </label>
-              <label class="inline-flex items-center mr-2">
-                <input class="text-blue-500 border-0 ring-0 outline-0" type="radio" name="level" x-model="searchLevel" @change="setSearchLevel($event.target.value)" value="STUDY" />
-                <span class="ml-1" :class="searchLevel === 'STUDY' ? 'text-white' : ''">Study</span>
-              </label>
-              <label class="inline-flex items-center mr-2">
-                <input class="text-blue-500 border-0 ring-0 outline-0" type="radio" name="level" x-model="searchLevel" @change="setSearchLevel($event.target.value)" value="SERIES" />
-                <span class="ml-1" :class="searchLevel === 'SERIES' ? 'text-white' : ''">Series</span>
-              </label>
-            </fieldset>
-            <button type="button" class="inline-flex justify-center items-center text-center text-sm ml-auto bg-sky-600 px-3 py-1 rounded hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="false" @click="runPacsSearch()">
-              <span>Search</span>
-            </button>
+          <div class="flex-none flex flex-col gap-1 p-3 py-2 pt-0">
+            <div class="flex items-center">
+              <fieldset class="flex items-center text-sm text-slate-400">
+                <legend class="float-left mr-3">Level:</legend>
+                <label class="inline-flex items-center mr-2">
+                  <input class="text-blue-500 border-0 ring-0 outline-0" type="radio" name="level" x-model="searchLevel" @change="setSearchLevel($event.target.value)" value="PATIENT" />
+                  <span class="ml-1" :class="searchLevel === 'PATIENT' ? 'text-white' : ''">Patient</span>
+                </label>
+                <label class="inline-flex items-center mr-2">
+                  <input class="text-blue-500 border-0 ring-0 outline-0" type="radio" name="level" x-model="searchLevel" @change="setSearchLevel($event.target.value)" value="STUDY" />
+                  <span class="ml-1" :class="searchLevel === 'STUDY' ? 'text-white' : ''">Study</span>
+                </label>
+                <label class="inline-flex items-center mr-2">
+                  <input class="text-blue-500 border-0 ring-0 outline-0" type="radio" name="level" x-model="searchLevel" @change="setSearchLevel($event.target.value)" value="SERIES" />
+                  <span class="ml-1" :class="searchLevel === 'SERIES' ? 'text-white' : ''">Series</span>
+                </label>
+              </fieldset>
+              <button type="button" class="inline-flex justify-center items-center text-center text-sm ml-auto bg-sky-600 px-3 py-1 rounded hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="false" @click="runPacsSearch()">
+                <span>Search</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -170,6 +172,17 @@
           </ul>
         </div>
       </div>
+      <div class="flex-none border-t border-white/15 bg-slate-950/90 px-3 py-2 text-xs font-medium" role="status" aria-live="polite">
+        <span
+          x-text="connectionStatus || 'Ready'"
+          :class="{
+            'text-emerald-400': connectionStatusType === 'success',
+            'text-rose-400': connectionStatusType === 'error',
+            'text-sky-300': connectionStatusType === 'info',
+            'text-slate-400': !connectionStatus,
+          }"
+        ></span>
+      </div>
     </div>
   </div>
 
@@ -184,7 +197,7 @@
       Alpine.data('app', () => {
         return {
           myAet: 'PMTARO',
-          timeoutSec: 20,
+          timeoutSec: 3,
 
           pacs: {
             aet: 'ORTHANC',
@@ -202,6 +215,8 @@
           searchLevel: 'PATIENT',
           searchTags: ['PatientID', 'PatientName', 'PatientBirthDate', 'PatientSex'],
           searchKeys: ['', '', '', ''],
+          connectionStatus: '',
+          connectionStatusType: 'info',
 
           setSearchLevel(lv) {
             this.searchLevel = lv;
@@ -233,11 +248,19 @@
             return port;
           },
 
+          setConnectionStatus(message, type = 'info') {
+            this.connectionStatus = message;
+            this.connectionStatusType = type;
+          },
+
           async runPacsConnect() {
             const port = this.parsePortNumber(this.pacs.port, 'Port');
             if (port === null) {
+              this.setConnectionStatus('Connection failed: port must be an integer between 1 and 65535.', 'error');
               return;
             }
+
+            this.setConnectionStatus('Connecting to PACS...', 'info');
 
             try {
               const connected = await $electron?.api('@pmt/pacs-client/pacsConnect', {
@@ -247,8 +270,15 @@
                 callingAet: this.myAet,
                 timeoutSec: this.timeoutSec,
               });
+              this.setConnectionStatus(
+                connected
+                  ? `PACS connected successfully: ${this.pacs.aet}@${this.pacs.host}:${port}`
+                  : `PACS connection failed: ${this.pacs.aet}@${this.pacs.host}:${port}`,
+                connected ? 'success' : 'error',
+              );
               console.log(`Connect ${connected ? 'succeeded' : 'failed'}`);
             } catch (err) {
+              this.setConnectionStatus(`PACS connection failed: ${err?.message ?? err}`, 'error');
               console.error(err);
             }
           },
@@ -323,6 +353,7 @@
             const queryModel = level === 'PATIENT' ? 'P' : 'S';
             const port = this.parsePortNumber(this.pacs.port, 'Port');
             if (port === null) {
+              this.setConnectionStatus('Search failed: port must be an integer between 1 and 65535.', 'error');
               return;
             }
             const keys = this.searchKeys.map((key, index) => {
@@ -334,6 +365,8 @@
 
             data.records = [];
             try {
+              this.setConnectionStatus('Searching PACS...', 'info');
+
               const params = {
                 host: this.pacs.host,
                 port,
@@ -347,10 +380,24 @@
               console.log('search with params:', params);
               const res = await $electron?.api('@pmt/pacs-client/pacsSearch', params);
               console.log(res);
+              if (res?.success === false) {
+                const details = String(res.stderr || res.stdout || '').trim();
+                this.setConnectionStatus(
+                  details
+                    ? `Search failed: ${details}`
+                    : `Search failed with exit code ${res.exitCode}.`,
+                  'error',
+                );
+                return;
+              }
+
               if (res?.records?.length) {
                 data.records = res.records;
               }
+              const recordCount = typeof res?.recordCount === 'number' ? res.recordCount : (res?.records?.length ?? 0);
+              this.setConnectionStatus(`Search completed: ${recordCount} record(s) found.`, 'success');
             } catch (err) {
+              this.setConnectionStatus(`Search failed: ${err?.message ?? err}`, 'error');
               console.error(err);
             }
           },
@@ -388,20 +435,25 @@
               }
             }
             if (!this.storageFolder) {
+              this.setConnectionStatus('Download failed: storage folder is required.', 'error');
               return;
             }
 
             const port = this.parsePortNumber(this.pacs.port, 'Port');
             if (port === null) {
+              this.setConnectionStatus('Download failed: port must be an integer between 1 and 65535.', 'error');
               return;
             }
 
             const localPort = this.parsePortNumber(this.pacs.localPort, 'Local Port');
             if (localPort === null) {
+              this.setConnectionStatus('Download failed: local port must be an integer between 1 and 65535.', 'error');
               return;
             }
 
             try {
+              this.setConnectionStatus('Downloading from PACS...', 'info');
+
               const res = await $electron?.api('@pmt/pacs-client/pacsDownload', {
                 host: this.pacs.host,
                 port,
@@ -414,13 +466,27 @@
                 outputDir: this.storageFolder,
               });
               console.log(res);
+              if (res?.success === false) {
+                const details = String(res.stderr || res.stdout || '').trim();
+                this.setConnectionStatus(
+                  details
+                    ? `Download failed: ${details}`
+                    : `Download failed with exit code ${res.exitCode}.`,
+                  'error',
+                );
+                return;
+              }
+
               if (res.success) {
+                const downloadedCount = Array.isArray(res.downloadedFiles) ? res.downloadedFiles.length : 0;
+                this.setConnectionStatus(`Download completed: ${downloadedCount} file(s) saved.`, 'success');
                 const downloadedFilePath = res.downloadedFiles[0];
                 if (downloadedFilePath) {
                   await $electron?.showInFolder(downloadedFilePath, true);
                 }
               }
             } catch (err) {
+              this.setConnectionStatus(`Download failed: ${err?.message ?? err}`, 'error');
               console.error(err);
             }
           },
