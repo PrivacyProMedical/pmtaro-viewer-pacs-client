@@ -21,6 +21,24 @@ export interface PacsConnectionOptions {
 /** Downloads matching patients, studies, or series directly into the resolved output subdirectory. */
 export declare function pacsDownload(options: PacsDownloadOptions): PacsDownloadResult
 
+export interface PacsDownloadJobHandle {
+  jobId: string
+  state: string
+  outputDir: string
+  totalInstances?: number
+}
+
+export interface PacsDownloadJobStatus {
+  jobId: string
+  state: string
+  outputDir: string
+  totalInstances?: number
+  downloadedInstances: number
+  exitCode?: number
+  error?: string
+  downloadedFiles?: Array<string>
+}
+
 export interface PacsDownloadOptions {
   host: string
   port: number
@@ -41,6 +59,12 @@ export interface PacsDownloadResult {
   stderr: string
   downloadedFiles: Array<string>
 }
+
+/** Starts a background PACS download job and returns immediately with a polling handle. */
+export declare function pacsDownloadStart(options: PacsDownloadOptions): PacsDownloadJobHandle
+
+/** Returns the latest known state for a PACS download job. */
+export declare function pacsDownloadStatus(jobId: string): PacsDownloadJobStatus
 
 /** Executes a C-FIND query and returns parsed DICOM records from the PACS server. */
 export declare function pacsSearch(options: PacsSearchOptions): PacsSearchResult

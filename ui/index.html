@@ -34,7 +34,7 @@
   </style>
 </head>
 <body class="bg-slate-900 text-white">
-  <div id="app" x-data="app">
+  <div id="app" x-data="pacsApp()">
     <div class="h-full flex flex-col divide-y divide-white/15">
       <div class="flex-none flex flex-wrap divide-x divide-white/15">
         <div class="flex-1 max-w-1/2 flex flex-col divide-y divide-white/15">
@@ -163,8 +163,11 @@
                       <span x-text="`(${field.tag})`" class="tabular-nums"></span> <span x-text="field.keyword"></span>: <span x-text="field.value"></span>
                     </div>
                   </template>
-                  <button type="button" class="text-white disabled:text-white/50 hover:text-sky-500 text-lg! absolute right-0 bottom-0 mx-4 my-2" :disabled="!storageFolder" @click="runPacsDownload(rec)">
-                    Download
+                  <div class="mt-3 min-h-4 pr-28 text-xs font-medium" :class="getRecordDownloadStatusClass(rec)">
+                    <span x-text="getRecordDownloadStatusText(rec)"></span>
+                  </div>
+                  <button type="button" class="text-white disabled:text-white/50 hover:text-sky-500 text-lg! absolute right-0 bottom-0 mx-4 my-2" :disabled="!storageFolder || isRecordDownloadBusy(rec)" @click="runPacsDownload(rec)">
+                    <span x-text="getRecordDownloadButtonLabel(rec)"></span>
                   </button>
                 </fieldset>
               </li>
@@ -187,321 +190,722 @@
   </div>
 
   <script src="./alpinejs@3.15.8/dist/cdn.min.js" defer></script>
-  <script>
-    // export DCMDICTPATH=/opt/homebrew/share/dcmtk-3.7.0/dicom.dic
+  <script type="module">
+    import {
+      PacsDownloadQueue,
+      createDownloadRequestFingerprint,
+      isPendingDownloadState,
+      toPlainDownloadRequest,
+    } from './download-queue.js';
 
-    const app = document.getElementById('app');
+    const appRoot = document.getElementById('app');
     let data = null;
+    let appRegistered = false;
 
-    document.addEventListener('alpine:init', () => {
-      Alpine.data('app', () => {
-        return {
-          myAet: 'PMTARO',
-          timeoutSec: 3,
+    function registerApp() {
+      if (appRegistered) {
+        return;
+      }
+      appRegistered = true;
 
-          pacs: {
-            aet: 'ORTHANC',
-            host: '127.0.0.1',
-            port: 4242,
-            localPort: 10104,
-          },
+      Alpine.data('pacsApp', () => ({
+        myAet: 'PMTARO',
+        timeoutSec: 3,
 
-          records: [],
-          get recordsPre() {
-            return JSON.stringify(this.records, null, 2);
-          },
-          storageFolder: '',
+        pacs: {
+          aet: 'ORTHANC',
+          host: '127.0.0.1',
+          port: 4242,
+          localPort: 10104,
+        },
 
-          searchLevel: 'PATIENT',
-          searchTags: ['PatientID', 'PatientName', 'PatientBirthDate', 'PatientSex'],
-          searchKeys: ['', '', '', ''],
-          connectionStatus: '',
-          connectionStatusType: 'info',
+        records: [],
+        get recordsPre() {
+          return JSON.stringify(this.records, null, 2);
+        },
+        storageFolder: '',
 
-          setSearchLevel(lv) {
-            this.searchLevel = lv;
-            switch(this.searchLevel) {
-              case 'PATIENT':
-                this.searchTags = ['PatientID', 'PatientName', 'PatientBirthDate', 'PatientSex'];
-                this.searchKeys = ['', '', '', ''];
-                break;
-              case 'STUDY':
-                this.searchTags = ['StudyID', 'StudyDate', 'StudyTime', 'StudyDescription'];
-                this.searchKeys = ['', '', '', ''];
-                break;
-              case 'SERIES':
-                this.searchTags = ['SeriesDate', 'SeriesTime', 'SeriesDescription', 'Modality'];
-                this.searchKeys = ['', '', '', ''];
-                break;
-              default:
-                this.searchTags = [];
-                this.searchKeys = [];
+        searchLevel: 'PATIENT',
+        searchTags: ['PatientID', 'PatientName', 'PatientBirthDate', 'PatientSex'],
+        searchKeys: ['', '', '', ''],
+        connectionStatus: '',
+        connectionStatusType: 'info',
+        downloadQueue: new PacsDownloadQueue(),
+        downloadPollTimerId: null,
+        downloadPollInFlight: false,
+
+        init() {
+          data = this;
+        },
+
+        setSearchLevel(lv) {
+          this.searchLevel = lv;
+          switch (this.searchLevel) {
+            case 'PATIENT':
+              this.searchTags = ['PatientID', 'PatientName', 'PatientBirthDate', 'PatientSex'];
+              this.searchKeys = ['', '', '', ''];
+              break;
+            case 'STUDY':
+              this.searchTags = ['StudyID', 'StudyDate', 'StudyTime', 'StudyDescription'];
+              this.searchKeys = ['', '', '', ''];
+              break;
+            case 'SERIES':
+              this.searchTags = ['SeriesDate', 'SeriesTime', 'SeriesDescription', 'Modality'];
+              this.searchKeys = ['', '', '', ''];
+              break;
+            default:
+              this.searchTags = [];
+              this.searchKeys = [];
+          }
+        },
+
+        parsePortNumber(value, fieldName) {
+          const port = typeof value === 'number' ? value : Number(String(value).trim());
+          if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            console.error(`${fieldName} must be an integer between 1 and 65535`);
+            return null;
+          }
+          return port;
+        },
+
+        setConnectionStatus(message, type = 'info') {
+          this.connectionStatus = message;
+          this.connectionStatusType = type;
+        },
+
+        createIdleDownloadState() {
+          return {
+            state: 'idle',
+            queuePosition: null,
+            jobId: '',
+            totalInstances: null,
+            downloadedInstances: 0,
+            error: '',
+            downloadedFiles: [],
+          };
+        },
+
+        cloneDownloadState(download) {
+          return {
+            ...this.createIdleDownloadState(),
+            ...(download ?? {}),
+          };
+        },
+
+        buildRecordRowKey(record) {
+          const signature = (record.fields ?? [])
+            .map((field) => `${field.keyword}=${field.value}`)
+            .join('|');
+          return `${this.searchLevel}:${signature}`;
+        },
+
+        decorateSearchRecords(records) {
+          const previousStates = new Map(
+            this.records.map((record) => [record.rowKey, this.cloneDownloadState(record.download)]),
+          );
+
+          return (records ?? []).map((record) => {
+            const rowKey = this.buildRecordRowKey(record);
+            return {
+              ...record,
+              rowKey,
+              download: previousStates.get(rowKey) ?? this.createIdleDownloadState(),
+            };
+          });
+        },
+
+        findRecord(rowKey) {
+          return this.records.find((record) => record.rowKey === rowKey) ?? null;
+        },
+
+        ensureRecordDownload(record) {
+          if (!record.download) {
+            record.download = this.createIdleDownloadState();
+          }
+          return record.download;
+        },
+
+        updateRecordDownload(rowKey, updates) {
+          const record = this.findRecord(rowKey);
+          if (!record) {
+            return;
+          }
+
+          const download = this.ensureRecordDownload(record);
+          Object.assign(download, updates);
+          if (!isPendingDownloadState(download.state)) {
+            download.queuePosition = null;
+          }
+        },
+
+        syncQueuedDownloadStates() {
+          for (const record of this.records) {
+            const download = this.ensureRecordDownload(record);
+            if (download.state === 'queued') {
+              download.queuePosition = this.downloadQueue.getQueuePosition(record.rowKey);
             }
-          },
+          }
+        },
 
-          parsePortNumber(value, fieldName) {
-            const port = typeof value === 'number' ? value : Number(String(value).trim());
-            if (!Number.isInteger(port) || port < 1 || port > 65535) {
-              console.error(`${fieldName} must be an integer between 1 and 65535`);
-              return null;
+        getRecordDownloadState(record) {
+          return record?.download?.state ?? 'idle';
+        },
+
+        isRecordDownloadBusy(record) {
+          return isPendingDownloadState(this.getRecordDownloadState(record));
+        },
+
+        getRecordDownloadButtonLabel(record) {
+          switch (this.getRecordDownloadState(record)) {
+            case 'queued':
+              return 'Queued';
+            case 'preparing':
+              return 'Preparing';
+            case 'downloading':
+              return 'Downloading';
+            default:
+              return 'Download';
+          }
+        },
+
+        getRecordDownloadStatusText(record) {
+          const download = record?.download ?? this.createIdleDownloadState();
+          switch (download.state) {
+            case 'queued':
+              return download.queuePosition ? `Queued (#${download.queuePosition})` : 'Queued';
+            case 'preparing':
+              return 'Preparing download...';
+            case 'downloading':
+              return download.totalInstances == null
+                ? `Downloading ${download.downloadedInstances} instance(s)`
+                : `Downloading ${download.downloadedInstances} / ${download.totalInstances} instance(s)`;
+            case 'completed': {
+              const downloadedCount = Array.isArray(download.downloadedFiles)
+                ? download.downloadedFiles.length
+                : download.downloadedInstances;
+              return `Completed: ${downloadedCount} file(s) saved.`;
             }
-            return port;
-          },
+            case 'failed':
+              return download.error ? `Failed: ${download.error}` : 'Failed';
+            default:
+              return '';
+          }
+        },
 
-          setConnectionStatus(message, type = 'info') {
-            this.connectionStatus = message;
-            this.connectionStatusType = type;
-          },
+        getRecordDownloadStatusClass(record) {
+          const state = this.getRecordDownloadState(record);
+          return {
+            'text-amber-300': state === 'queued',
+            'text-sky-300': state === 'preparing' || state === 'downloading',
+            'text-emerald-400': state === 'completed',
+            'text-rose-400': state === 'failed',
+            'text-slate-500': state === 'idle',
+          };
+        },
 
-          async runPacsConnect() {
-            const port = this.parsePortNumber(this.pacs.port, 'Port');
-            if (port === null) {
-              this.setConnectionStatus('Connection failed: port must be an integer between 1 and 65535.', 'error');
-              return;
+        buildDownloadKeys(record) {
+          const level = this.searchLevel;
+          const keys = [];
+
+          if (level === 'PATIENT') {
+            const patientIdField = record.fields.find((field) => field.keyword === 'PatientID');
+            if (patientIdField?.value) {
+              keys.push(`PatientID=${patientIdField.value}`);
             }
+            const patientNameField = record.fields.find((field) => field.keyword === 'PatientName');
+            if (patientNameField?.value) {
+              keys.push(`PatientName=${patientNameField.value}`);
+            }
+          } else if (level === 'STUDY') {
+            const studyInstanceUIDField = record.fields.find((field) => field.keyword === 'StudyInstanceUID');
+            if (studyInstanceUIDField?.value) {
+              keys.push(`StudyInstanceUID=${studyInstanceUIDField.value}`);
+            }
+          } else if (level === 'SERIES') {
+            const seriesInstanceUIDField = record.fields.find((field) => field.keyword === 'SeriesInstanceUID');
+            if (seriesInstanceUIDField?.value) {
+              keys.push(`SeriesInstanceUID=${seriesInstanceUIDField.value}`);
+            }
+          }
 
-            this.setConnectionStatus('Connecting to PACS...', 'info');
+          return keys;
+        },
 
-            try {
-              const connected = await $electron?.api('@pmt/pacs-client/pacsConnect', {
-                host: this.pacs.host,
-                port,
-                calledAet: this.pacs.aet,
-                callingAet: this.myAet,
-                timeoutSec: this.timeoutSec,
-              });
-              this.setConnectionStatus(
-                connected
-                  ? `PACS connected successfully: ${this.pacs.aet}@${this.pacs.host}:${port}`
-                  : `PACS connection failed: ${this.pacs.aet}@${this.pacs.host}:${port}`,
-                connected ? 'success' : 'error',
-              );
-              console.log(`Connect ${connected ? 'succeeded' : 'failed'}`);
-            } catch (err) {
-              this.setConnectionStatus(`PACS connection failed: ${err?.message ?? err}`, 'error');
+        buildDownloadRequest(record) {
+          const keys = this.buildDownloadKeys(record);
+          if (!keys.length) {
+            this.setConnectionStatus('Download failed: unable to resolve query keys for this result.', 'error');
+            return null;
+          }
+
+          if (!this.storageFolder) {
+            this.setConnectionStatus('Download failed: storage folder is required.', 'error');
+            return null;
+          }
+
+          const port = this.parsePortNumber(this.pacs.port, 'Port');
+          if (port === null) {
+            this.setConnectionStatus('Download failed: port must be an integer between 1 and 65535.', 'error');
+            return null;
+          }
+
+          const localPort = this.parsePortNumber(this.pacs.localPort, 'Local Port');
+          if (localPort === null) {
+            this.setConnectionStatus('Download failed: local port must be an integer between 1 and 65535.', 'error');
+            return null;
+          }
+
+          const request = {
+            host: this.pacs.host,
+            port,
+            localPort,
+            calledAet: this.pacs.aet,
+            callingAet: this.myAet,
+            timeoutSec: this.timeoutSec,
+            level: this.searchLevel,
+            keys,
+            outputDir: this.storageFolder,
+          };
+
+          return {
+            rowKey: record.rowKey,
+            request,
+            requestFingerprint: createDownloadRequestFingerprint(request),
+          };
+        },
+
+        getQueueSummary() {
+          const activeCount = this.downloadQueue.getActive() ? 1 : 0;
+          const waitingCount = this.downloadQueue.waitingCount;
+          if (!activeCount && !waitingCount) {
+            return '';
+          }
+          if (activeCount && waitingCount) {
+            return `${activeCount} in progress, ${waitingCount} queued.`;
+          }
+          if (activeCount) {
+            return '1 in progress.';
+          }
+          return `${waitingCount} queued.`;
+        },
+
+        withQueueSummary(message) {
+          const summary = this.getQueueSummary();
+          return summary ? `${message} ${summary}` : message;
+        },
+
+        describeDownloadProgress(status) {
+          const downloadedInstances = typeof status?.downloadedInstances === 'number'
+            ? status.downloadedInstances
+            : 0;
+
+          if (typeof status?.totalInstances === 'number') {
+            return `${downloadedInstances} / ${status.totalInstances} instance(s)`;
+          }
+
+          return `${downloadedInstances} instance(s)`;
+        },
+
+        describeDownloadFailure(reason) {
+          if (typeof reason?.error === 'string' && reason.error.trim()) {
+            return reason.error.trim();
+          }
+          if (typeof reason?.message === 'string' && reason.message.trim()) {
+            return reason.message.trim();
+          }
+          if (typeof reason?.exitCode === 'number') {
+            return `exit code ${reason.exitCode}`;
+          }
+          return String(reason ?? 'Unknown error');
+        },
+
+        startDownloadPolling() {
+          if (this.downloadPollTimerId !== null) {
+            return;
+          }
+
+          this.downloadPollTimerId = window.setInterval(() => {
+            this.pollActiveDownload().catch((err) => {
               console.error(err);
-            }
-          },
-
-          async runPacsUpload() {
-            const port = this.parsePortNumber(this.pacs.port, 'Port');
-            if (port === null) {
-              return;
-            }
-
-            let rootDir = '';
-            const { canceled, filePaths: fullPaths } = await $electron.showOpenDialog({
-              properties: ['openDirectory'],
             });
-            if (!canceled && fullPaths[0]) {
-              rootDir = fullPaths[0];
-            } else {
-              rootDir = '';
+          }, 700);
+        },
+
+        stopDownloadPolling() {
+          if (this.downloadPollTimerId !== null) {
+            window.clearInterval(this.downloadPollTimerId);
+            this.downloadPollTimerId = null;
+          }
+          this.downloadPollInFlight = false;
+        },
+
+        async finishActiveDownload(status) {
+          this.stopDownloadPolling();
+          const { finished } = this.downloadQueue.advance();
+          this.syncQueuedDownloadStates();
+
+          if (!finished) {
+            return;
+          }
+
+          const downloadedFiles = Array.isArray(status?.downloadedFiles) ? status.downloadedFiles : [];
+          const downloadedInstances = typeof status?.downloadedInstances === 'number'
+            ? status.downloadedInstances
+            : downloadedFiles.length;
+
+          if (status?.state === 'completed') {
+            this.updateRecordDownload(finished.rowKey, {
+              state: 'completed',
+              jobId: status.jobId ?? finished.jobId ?? '',
+              totalInstances: typeof status.totalInstances === 'number' ? status.totalInstances : null,
+              downloadedInstances,
+              error: '',
+              downloadedFiles,
+            });
+            this.setConnectionStatus(
+              this.withQueueSummary(`Download completed: ${downloadedFiles.length} file(s) saved.`),
+              'success',
+            );
+
+            const downloadedFilePath = downloadedFiles[0];
+            if (downloadedFilePath) {
+              await $electron?.showInFolder(downloadedFilePath, true);
             }
-            if (!rootDir) {
+          } else {
+            const details = this.describeDownloadFailure(status);
+            this.updateRecordDownload(finished.rowKey, {
+              state: 'failed',
+              jobId: status?.jobId ?? finished.jobId ?? '',
+              totalInstances: typeof status?.totalInstances === 'number' ? status.totalInstances : null,
+              downloadedInstances,
+              error: details,
+              downloadedFiles,
+            });
+            this.setConnectionStatus(this.withQueueSummary(`Download failed: ${details}`), 'error');
+          }
+
+          await this.startNextQueuedDownload();
+        },
+
+        async finishActiveDownloadWithError(error) {
+          const activeItem = this.downloadQueue.getActive();
+          if (!activeItem) {
+            this.stopDownloadPolling();
+            return;
+          }
+
+          await this.finishActiveDownload({
+            state: 'failed',
+            jobId: activeItem.jobId ?? '',
+            outputDir: activeItem.request.outputDir,
+            totalInstances: null,
+            downloadedInstances: 0,
+            error: this.describeDownloadFailure(error),
+            downloadedFiles: [],
+          });
+        },
+
+        applyDownloadStatus(activeItem, status) {
+          const downloadedFiles = Array.isArray(status?.downloadedFiles) ? status.downloadedFiles : [];
+          this.updateRecordDownload(activeItem.rowKey, {
+            state: status?.state ?? 'downloading',
+            jobId: status?.jobId ?? activeItem.jobId ?? '',
+            totalInstances: typeof status?.totalInstances === 'number' ? status.totalInstances : null,
+            downloadedInstances: typeof status?.downloadedInstances === 'number' ? status.downloadedInstances : 0,
+            error: status?.error ?? '',
+            downloadedFiles,
+          });
+
+          if (status?.state === 'preparing') {
+            this.setConnectionStatus(this.withQueueSummary('Preparing PACS download...'), 'info');
+          } else if (status?.state === 'downloading') {
+            this.setConnectionStatus(
+              this.withQueueSummary(`Downloading from PACS: ${this.describeDownloadProgress(status)}`),
+              'info',
+            );
+          }
+        },
+
+        async pollActiveDownload() {
+          const activeItem = this.downloadQueue.getActive();
+          if (!activeItem?.jobId || this.downloadPollInFlight) {
+            return;
+          }
+
+          this.downloadPollInFlight = true;
+          try {
+            const status = await $electron?.api('@pmt/pacs-client/pacsDownloadStatus', activeItem.jobId);
+            if (!status) {
               return;
             }
-            const filePaths = (await $electron?.readDirectory(rootDir, true)).filter(filePath => {
-              const fileName = filePath.split('/').pop();
-              if (fileName.startsWith('.')) {
-                return false;
-              }
-              if (fileName === 'DICOMDIR') {
-                return false;
-              }
-              if (fileName.toLowerCase().endsWith('.dcm') || !fileName.includes('.')) {
-                return true;
-              }
+
+            this.applyDownloadStatus(activeItem, status);
+
+            if (status.state === 'completed' || status.state === 'failed') {
+              await this.finishActiveDownload(status);
+            }
+          } catch (err) {
+            await this.finishActiveDownloadWithError(err);
+          } finally {
+            this.downloadPollInFlight = false;
+          }
+        },
+
+        async startNextQueuedDownload() {
+          if (this.downloadQueue.getActive()) {
+            this.startDownloadPolling();
+            return;
+          }
+
+          const nextItem = this.downloadQueue.startNext();
+          this.syncQueuedDownloadStates();
+
+          if (!nextItem) {
+            this.stopDownloadPolling();
+            return;
+          }
+
+          this.updateRecordDownload(nextItem.rowKey, {
+            state: 'preparing',
+            queuePosition: null,
+            jobId: '',
+            totalInstances: null,
+            downloadedInstances: 0,
+            error: '',
+            downloadedFiles: [],
+          });
+          this.setConnectionStatus(this.withQueueSummary('Preparing PACS download...'), 'info');
+
+          try {
+            const handle = await $electron?.api(
+              '@pmt/pacs-client/pacsDownloadStart',
+              toPlainDownloadRequest(nextItem.request),
+            );
+            if (!handle?.jobId) {
+              throw new Error('Download job did not return a job id.');
+            }
+
+            nextItem.jobId = handle.jobId;
+            this.updateRecordDownload(nextItem.rowKey, {
+              state: handle.state || 'preparing',
+              queuePosition: null,
+              jobId: handle.jobId,
+              totalInstances: typeof handle.totalInstances === 'number' ? handle.totalInstances : null,
+              downloadedInstances: 0,
+              error: '',
+              downloadedFiles: [],
+            });
+
+            this.startDownloadPolling();
+            await this.pollActiveDownload();
+          } catch (err) {
+            await this.finishActiveDownloadWithError(err);
+          }
+        },
+
+        async selectStorageFolder() {
+          const { canceled, filePaths: fullPaths } = await $electron.showOpenDialog({
+            properties: ['openDirectory'],
+          });
+          if (!canceled && fullPaths[0]) {
+            this.storageFolder = fullPaths[0];
+          } else {
+            this.storageFolder = '';
+          }
+        },
+
+        async runPacsConnect() {
+          const port = this.parsePortNumber(this.pacs.port, 'Port');
+          if (port === null) {
+            this.setConnectionStatus('Connection failed: port must be an integer between 1 and 65535.', 'error');
+            return;
+          }
+
+          this.setConnectionStatus('Connecting to PACS...', 'info');
+
+          try {
+            const connected = await $electron?.api('@pmt/pacs-client/pacsConnect', {
+              host: this.pacs.host,
+              port,
+              calledAet: this.pacs.aet,
+              callingAet: this.myAet,
+              timeoutSec: this.timeoutSec,
+            });
+            this.setConnectionStatus(
+              connected
+                ? `PACS connected successfully: ${this.pacs.aet}@${this.pacs.host}:${port}`
+                : `PACS connection failed: ${this.pacs.aet}@${this.pacs.host}:${port}`,
+              connected ? 'success' : 'error',
+            );
+            console.log(`Connect ${connected ? 'succeeded' : 'failed'}`);
+          } catch (err) {
+            this.setConnectionStatus(`PACS connection failed: ${err?.message ?? err}`, 'error');
+            console.error(err);
+          }
+        },
+
+        async runPacsUpload() {
+          const port = this.parsePortNumber(this.pacs.port, 'Port');
+          if (port === null) {
+            return;
+          }
+
+          let rootDir = '';
+          const { canceled, filePaths: fullPaths } = await $electron.showOpenDialog({
+            properties: ['openDirectory'],
+          });
+          if (!canceled && fullPaths[0]) {
+            rootDir = fullPaths[0];
+          }
+          if (!rootDir) {
+            return;
+          }
+
+          const filePaths = (await $electron?.readDirectory(rootDir, true)).filter((filePath) => {
+            const fileName = filePath.split('/').pop();
+            if (fileName.startsWith('.')) {
               return false;
+            }
+            if (fileName === 'DICOMDIR') {
+              return false;
+            }
+            if (fileName.toLowerCase().endsWith('.dcm') || !fileName.includes('.')) {
+              return true;
+            }
+            return false;
+          });
+          if (!filePaths.length) {
+            return;
+          }
+
+          try {
+            const res = await $electron?.api('@pmt/pacs-client/pacsUpload', {
+              host: this.pacs.host,
+              port,
+              calledAet: this.pacs.aet,
+              callingAet: this.myAet,
+              timeoutSec: this.timeoutSec,
+              filePaths,
             });
-            if (!filePaths.length) {
-              return;
+            console.log(res);
+            if (res.success) {
+              this.runPacsSearch();
             }
+          } catch (err) {
+            console.error(err);
+          }
+        },
 
-            try {
-              const res = await $electron?.api('@pmt/pacs-client/pacsUpload', {
-                host: this.pacs.host,
-                port,
-                calledAet: this.pacs.aet,
-                callingAet: this.myAet,
-                timeoutSec: this.timeoutSec,
-                filePaths,
-              });
-              console.log(res);
-              if (res.success) {
-                this.runPacsSearch();
-              }
-            } catch (err) {
-              console.error(err);
-            }
-          },
+        async runPacsSearch() {
+          const level = this.searchLevel;
+          const queryModel = level === 'PATIENT' ? 'P' : 'S';
+          const port = this.parsePortNumber(this.pacs.port, 'Port');
+          if (port === null) {
+            this.setConnectionStatus('Search failed: port must be an integer between 1 and 65535.', 'error');
+            return;
+          }
 
-          async runPacsSearch() {
-            // var level = 'PATIENT';
-            // var queryModel = 'P';
-            // var keys = [] || [`PatientName=${'KAM'}`];
-
-            // level = 'STUDY';
-            // queryModel = 'S';
-            // keys = [] && [`PatientName=${'KAM'}`, `StudyInstanceUID=${'1.2.840.113619.2.182.1080861414283.1617157566.1121395'}`];
-
-            // level = 'SERIES';
-            // queryModel = 'S';
-            // keys = [] || [`SeriesInstanceUID=${'1.3.46.670589.11.38008.5.0.8868.2021050810130987123'}`];
-
-            const level = this.searchLevel;
-            const queryModel = level === 'PATIENT' ? 'P' : 'S';
-            const port = this.parsePortNumber(this.pacs.port, 'Port');
-            if (port === null) {
-              this.setConnectionStatus('Search failed: port must be an integer between 1 and 65535.', 'error');
-              return;
-            }
-            const keys = this.searchKeys.map((key, index) => {
+          const keys = this.searchKeys
+            .map((key, index) => {
               if (!key.trim()) {
                 return null;
               }
               return `${this.searchTags[index]}=${key.trim()}`;
-            }).filter(Boolean);
+            })
+            .filter(Boolean);
 
-            data.records = [];
-            try {
-              this.setConnectionStatus('Searching PACS...', 'info');
+          this.records = [];
 
-              const params = {
-                host: this.pacs.host,
-                port,
-                calledAet: this.pacs.aet,
-                callingAet: this.myAet,
-                timeoutSec: this.timeoutSec,
-                level,
-                queryModel,
-                keys,
-              };
-              console.log('search with params:', params);
-              const res = await $electron?.api('@pmt/pacs-client/pacsSearch', params);
-              console.log(res);
-              if (res?.success === false) {
-                const details = String(res.stderr || res.stdout || '').trim();
-                this.setConnectionStatus(
-                  details
-                    ? `Search failed: ${details}`
-                    : `Search failed with exit code ${res.exitCode}.`,
-                  'error',
-                );
-                return;
-              }
+          try {
+            this.setConnectionStatus('Searching PACS...', 'info');
 
-              if (res?.records?.length) {
-                data.records = res.records;
-              }
-              const recordCount = typeof res?.recordCount === 'number' ? res.recordCount : (res?.records?.length ?? 0);
-              this.setConnectionStatus(`Search completed: ${recordCount} record(s) found.`, 'success');
-            } catch (err) {
-              this.setConnectionStatus(`Search failed: ${err?.message ?? err}`, 'error');
-              console.error(err);
-            }
-          },
-
-          async runPacsDownload(record) {
-            // var level = 'PATIENT';
-            // var keys = [`PatientName=${patientName}`];
-
-            // level = 'STUDY';
-            // keys = [`StudyInstanceUID=${'1.2.156.113704.2.284.3.127936524.40.1373344856.493'}`];
-
-            // level = 'SERIES';
-            // keys = [`SeriesInstanceUID=${'1.3.12.2.1107.5.1.4.155673.30000022082600113465200040097'}`];
-
-            const level = this.searchLevel;
-            const keys = [];
-            if (level === 'PATIENT') {
-              const patientIdField = record.fields.find(field => field.keyword === 'PatientID');
-              if (patientIdField) {
-                keys.push(`PatientID=${patientIdField.value}`);
-              }
-              const patientNameField = record.fields.find(field => field.keyword === 'PatientName');
-              if (patientNameField) {
-                keys.push(`PatientName=${patientNameField.value}`);
-              }
-            } else if (level === 'STUDY') {
-              const studyInstanceUIDField = record.fields.find(field => field.keyword === 'StudyInstanceUID');
-              if (studyInstanceUIDField) {
-                keys.push(`StudyInstanceUID=${studyInstanceUIDField.value}`);
-              }
-            } else if (level === 'SERIES') {
-              const seriesInstanceUIDField = record.fields.find(field => field.keyword === 'SeriesInstanceUID');
-              if (seriesInstanceUIDField) {
-                keys.push(`SeriesInstanceUID=${seriesInstanceUIDField.value}`);
-              }
-            }
-            if (!this.storageFolder) {
-              this.setConnectionStatus('Download failed: storage folder is required.', 'error');
+            const params = {
+              host: this.pacs.host,
+              port,
+              calledAet: this.pacs.aet,
+              callingAet: this.myAet,
+              timeoutSec: this.timeoutSec,
+              level,
+              queryModel,
+              keys,
+            };
+            console.log('search with params:', params);
+            const res = await $electron?.api('@pmt/pacs-client/pacsSearch', params);
+            console.log(res);
+            if (res?.success === false) {
+              const details = String(res.stderr || res.stdout || '').trim();
+              this.setConnectionStatus(
+                details
+                  ? `Search failed: ${details}`
+                  : `Search failed with exit code ${res.exitCode}.`,
+                'error',
+              );
               return;
             }
 
-            const port = this.parsePortNumber(this.pacs.port, 'Port');
-            if (port === null) {
-              this.setConnectionStatus('Download failed: port must be an integer between 1 and 65535.', 'error');
-              return;
+            if (res?.records?.length) {
+              this.records = this.decorateSearchRecords(res.records);
+              this.syncQueuedDownloadStates();
             }
-
-            const localPort = this.parsePortNumber(this.pacs.localPort, 'Local Port');
-            if (localPort === null) {
-              this.setConnectionStatus('Download failed: local port must be an integer between 1 and 65535.', 'error');
-              return;
-            }
-
-            try {
-              this.setConnectionStatus('Downloading from PACS...', 'info');
-
-              const res = await $electron?.api('@pmt/pacs-client/pacsDownload', {
-                host: this.pacs.host,
-                port,
-                localPort,
-                calledAet: this.pacs.aet,
-                callingAet: this.myAet,
-                timeoutSec: this.timeoutSec,
-                level,
-                keys,
-                outputDir: this.storageFolder,
-              });
-              console.log(res);
-              if (res?.success === false) {
-                const details = String(res.stderr || res.stdout || '').trim();
-                this.setConnectionStatus(
-                  details
-                    ? `Download failed: ${details}`
-                    : `Download failed with exit code ${res.exitCode}.`,
-                  'error',
-                );
-                return;
-              }
-
-              if (res.success) {
-                const downloadedCount = Array.isArray(res.downloadedFiles) ? res.downloadedFiles.length : 0;
-                this.setConnectionStatus(`Download completed: ${downloadedCount} file(s) saved.`, 'success');
-                const downloadedFilePath = res.downloadedFiles[0];
-                if (downloadedFilePath) {
-                  await $electron?.showInFolder(downloadedFilePath, true);
-                }
-              }
-            } catch (err) {
-              this.setConnectionStatus(`Download failed: ${err?.message ?? err}`, 'error');
-              console.error(err);
-            }
-          },
-
-          test() {
-            $electron?.api('@pmt/export/test', ...arguments).then(res => {
-              console.debug('api invoke:', "`@pmt/export/test`", res);
-            });
+            const recordCount = typeof res?.recordCount === 'number' ? res.recordCount : (res?.records?.length ?? 0);
+            this.setConnectionStatus(`Search completed: ${recordCount} record(s) found.`, 'success');
+          } catch (err) {
+            this.setConnectionStatus(`Search failed: ${err?.message ?? err}`, 'error');
+            console.error(err);
           }
-        };
-      });
-      setTimeout(() => {
-        data = app._x_dataStack[0];
-      }, 100);
-    });
+        },
+
+        async runPacsDownload(record) {
+          const candidate = this.buildDownloadRequest(record);
+          if (!candidate) {
+            return;
+          }
+
+          const enqueueResult = this.downloadQueue.enqueue({
+            rowKey: candidate.rowKey,
+            request: candidate.request,
+            requestFingerprint: candidate.requestFingerprint,
+            jobId: null,
+          });
+
+          if (!enqueueResult.accepted) {
+            this.setConnectionStatus('Download ignored: this result is already active or queued.', 'info');
+            return;
+          }
+
+          this.updateRecordDownload(candidate.rowKey, {
+            state: 'queued',
+            queuePosition: enqueueResult.queuePosition,
+            jobId: '',
+            totalInstances: null,
+            downloadedInstances: 0,
+            error: '',
+            downloadedFiles: [],
+          });
+          this.syncQueuedDownloadStates();
+          this.setConnectionStatus(this.withQueueSummary('Download queued.'), 'info');
+
+          await this.startNextQueuedDownload();
+        },
+
+        test() {
+          $electron?.api('@pmt/export/test', ...arguments).then((res) => {
+            console.debug('api invoke:', '`@pmt/export/test`', res);
+          });
+        },
+      }));
+
+      if (appRoot?._x_dataStack) {
+        window.Alpine.destroyTree(appRoot);
+        window.Alpine.initTree(appRoot);
+      }
+    }
+
+    if (window.Alpine) {
+      registerApp();
+    } else {
+      document.addEventListener('alpine:init', registerApp, { once: true });
+    }
 
     window.addEventListener('DOMContentLoaded', () => $electron?.onLoaded());
     window.addEventListener('message', async (e) => {
@@ -513,22 +917,14 @@
         if (payload?.from === 'patient' && payload.selection) {
           console.log('load:', payload);
           setTimeout(() => {
+            if (!data) {
+              return;
+            }
             // ...
           }, 200);
         }
       }
     });
-
-    async function selectStorageFolder() {
-      const { canceled, filePaths: fullPaths } = await $electron.showOpenDialog({
-        properties: ['openDirectory'],
-      });
-      if (!canceled && fullPaths[0]) {
-        data.storageFolder = fullPaths[0];
-      } else {
-        data.storageFolder = '';
-      }
-    }
   </script>
 </body>
 </html>

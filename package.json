@@ -7,7 +7,8 @@
   "main": "main.js",
   "scripts": {
     "dev": "npx @tailwindcss/cli -i ./ui/tailwind.css -o ./ui/tailwind.min.css --watch",
-    "build": "npx @tailwindcss/cli -i ./ui/tailwind.css -o ./ui/tailwind.min.css --minify"
+    "build": "npx @tailwindcss/cli -i ./ui/tailwind.css -o ./ui/tailwind.min.css --minify",
+    "test:queue": "node --test ./ui/download-queue.test.mjs"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.2.2",

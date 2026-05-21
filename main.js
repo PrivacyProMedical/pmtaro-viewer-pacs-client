@@ -42,6 +42,8 @@ export default {
     pacsConnect: async (...args) => apiReady.then(api => apiLoader.run(api.pacsConnect)(...args)),
     pacsSearch: async (...args) => apiReady.then(api => apiLoader.run(api.pacsSearch)(...args)),
     pacsDownload: async (...args) => apiReady.then(api => apiLoader.run(api.pacsDownload)(...args)),
+    pacsDownloadStart: async (...args) => apiReady.then(api => apiLoader.run(api.pacsDownloadStart)(...args)),
+    pacsDownloadStatus: async (...args) => apiReady.then(api => apiLoader.run(api.pacsDownloadStatus)(...args)),
     pacsUpload: async (...args) => apiReady.then(api => apiLoader.run(api.pacsUpload)(...args)),
 
     // ...

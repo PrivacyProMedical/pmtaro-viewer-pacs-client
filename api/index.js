@@ -578,5 +578,7 @@ if (!nativeBinding) {
 module.exports = nativeBinding
 module.exports.pacsConnect = nativeBinding.pacsConnect
 module.exports.pacsDownload = nativeBinding.pacsDownload
+module.exports.pacsDownloadStart = nativeBinding.pacsDownloadStart
+module.exports.pacsDownloadStatus = nativeBinding.pacsDownloadStatus
 module.exports.pacsSearch = nativeBinding.pacsSearch
 module.exports.pacsUpload = nativeBinding.pacsUpload
