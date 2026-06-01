@@ -34,13 +34,85 @@
     [x-cloak] {
       display: none !important;
     }
+    .query-grid-shell {
+      border: 1px solid rgb(255 255 255 / 0.1);
+      border-radius: 0.25rem;
+      overflow: hidden;
+    }
+    .query-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 1px;
+      background: rgb(255 255 255 / 0.1);
+      align-items: start;
+    }
+    .query-grid__header {
+      background: rgb(2 6 23 / 0.8);
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      color: rgb(148 163 184);
+    }
+    .query-grid__cell {
+      min-width: 0;
+      background: rgb(15 23 42 / 0.3);
+      padding: 0.25rem 0.5rem;
+    }
+    .query-grid__cell--span-2 {
+      grid-column: span 2;
+    }
+    .query-grid__cell--span-3 {
+      grid-column: span 3;
+    }
+    .study-date-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+      min-width: 0;
+    }
+    .study-date-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+      min-width: 0;
+    }
+    .study-date-custom {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.75rem;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+    .study-date-custom-field {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      min-width: 0;
+    }
+    .study-date-custom-field input {
+      width: 10rem;
+      flex: 0 0 10rem;
+      min-width: 0;
+    }
+    @media (max-width: 520px) {
+      .study-date-custom {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.25rem;
+      }
+      .study-date-custom-field input {
+        width: auto;
+        flex: 1 1 auto;
+      }
+    }
   </style>
 </head>
 <body class="bg-slate-900 text-white">
   <div id="app" x-data="pacsApp()">
     <div class="h-full flex flex-col divide-y divide-white/15">
-      <div class="flex-none flex flex-wrap divide-x divide-white/15">
-        <div class="flex-1 max-w-1/2 flex flex-col divide-y divide-white/15">
+      <div class="flex-none flex flex-col divide-y divide-white/15">
+        <div class="flex flex-col divide-y divide-white/15">
           <div class="flex-none flex flex-col p-1.5 pb-3">
             <div class="flex flex-wrap items-end gap-3 p-1.5">
               <label class="min-w-0 flex-1 flex flex-col">
@@ -100,82 +172,94 @@
             <p class="px-1.5 pt-1 text-xs text-amber-300" x-show="profileActionLockReason" x-text="profileActionLockReason"></p>
           </div>
         </div>
-        <div class="flex-1 max-w-1/2 flex flex-col">
+        <div class="flex flex-col">
           <div class="flex-auto flex flex-col p-1.5 pb-3">
-            <div class="flex flex-col">
-              <!-- header -->
-              <div class="flex">
-                <div class="flex-1 px-1.5 pt-1.5 pb-0.5 text-sm text-slate-400">Tag</div>
-                <div class="flex-1 px-1.5 pt-1.5 pb-0.5 text-sm text-slate-400">Keyword</div>
-              </div>
-              <!-- row 0 -->
-              <div class="flex items-center">
-                <div class="flex-1 px-1.5 py-0.5">
+            <div class="query-grid-shell">
+              <div class="query-grid">
+                <div class="query-grid__header">Tag</div>
+                <div class="query-grid__header">Keyword</div>
+                <div class="query-grid__header">Tag</div>
+                <div class="query-grid__header">Keyword</div>
+
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
                   <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[0]"></option></select>
                 </div>
-                <div class="flex-1 px-1.5 py-0.5">
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
                   <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[0]" />
                 </div>
-              </div>
-              <!-- row 1: date range UI for STUDY, plain input for PATIENT/SERIES -->
-              <div class="flex items-start">
-                <div class="flex-1 px-1.5 py-0.5">
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
                   <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[1]"></option></select>
                 </div>
-                <div class="flex-1 px-1.5 py-0.5">
-                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-show="searchLevel !== 'STUDY'" x-model="searchKeys[1]" />
-                  <div x-show="searchLevel === 'STUDY'">
-                    <!-- Quick-select buttons -->
-                    <div class="flex flex-wrap gap-1">
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[1]" />
+                </div>
+
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[2]"></option></select>
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[2]" />
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[3]"></option></select>
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel !== 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[3]" />
+                </div>
+
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[0]"></option></select>
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[0]" />
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[2]"></option></select>
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[2]" />
+                </div>
+
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[3]"></option></select>
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[3]" />
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[4]"></option></select>
+                </div>
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[4]" />
+                </div>
+
+                <div class="query-grid__cell" x-show="searchLevel === 'STUDY'">
+                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[1]"></option></select>
+                </div>
+                <div class="query-grid__cell query-grid__cell--span-3" x-show="searchLevel === 'STUDY'">
+                  <div class="study-date-controls">
+                    <div class="study-date-presets">
                       <button type="button" @click="studyDateMode = 'all'" :class="studyDateMode === 'all' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'" class="rounded px-2 py-0.5 text-xs font-medium transition-colors">All</button>
                       <button type="button" @click="studyDateMode = 'today'" :class="studyDateMode === 'today' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'" class="rounded px-2 py-0.5 text-xs font-medium transition-colors">Today</button>
                       <button type="button" @click="studyDateMode = 'week'" :class="studyDateMode === 'week' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'" class="rounded px-2 py-0.5 text-xs font-medium transition-colors">This Week</button>
                       <button type="button" @click="studyDateMode = 'month'" :class="studyDateMode === 'month' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'" class="rounded px-2 py-0.5 text-xs font-medium transition-colors">This Month</button>
                       <button type="button" @click="studyDateMode = 'custom'" :class="studyDateMode === 'custom' ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'" class="rounded px-2 py-0.5 text-xs font-medium transition-colors">Custom</button>
                     </div>
-                    <!-- Custom date range pickers (visible only in custom mode) -->
-                    <div x-show="studyDateMode === 'custom'" class="mt-1.5 flex flex-col gap-1">
-                      <div class="flex items-center gap-1">
+                    <div x-show="studyDateMode === 'custom'" class="study-date-custom">
+                      <div class="study-date-custom-field">
                         <span class="text-xs text-slate-400 w-6 shrink-0">From</span>
-                        <input type="date" class="bg-slate-800 border border-slate-700/30 rounded px-1.5 py-0.5 text-xs text-white [color-scheme:dark] flex-1 min-w-0"
+                        <input type="date" lang="en-US" class="bg-slate-800 border border-slate-700/30 rounded px-1.5 py-0.5 text-xs text-white [color-scheme:dark] flex-1 min-w-0"
                           :value="formatDicomToDate(studyDateFrom)"
                           @change="studyDateFrom = formatDateToDicom($event.target.value)" />
                       </div>
-                      <div class="flex items-center gap-1">
+                      <div class="study-date-custom-field">
                         <span class="text-xs text-slate-400 w-6 shrink-0">To</span>
-                        <input type="date" class="bg-slate-800 border border-slate-700/30 rounded px-1.5 py-0.5 text-xs text-white [color-scheme:dark] flex-1 min-w-0"
+                        <input type="date" lang="en-US" class="bg-slate-800 border border-slate-700/30 rounded px-1.5 py-0.5 text-xs text-white [color-scheme:dark] flex-1 min-w-0"
                           :value="formatDicomToDate(studyDateTo)"
                           @change="studyDateTo = formatDateToDicom($event.target.value)" />
                       </div>
                     </div>
                   </div>
-                </div>
-              </div>
-              <!-- row 2 -->
-              <div class="flex items-center">
-                <div class="flex-1 px-1.5 py-0.5">
-                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[2]"></option></select>
-                </div>
-                <div class="flex-1 px-1.5 py-0.5">
-                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[2]" />
-                </div>
-              </div>
-              <!-- row 3 -->
-              <div class="flex items-center">
-                <div class="flex-1 px-1.5 py-0.5">
-                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[3]"></option></select>
-                </div>
-                <div class="flex-1 px-1.5 py-0.5">
-                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[3]" />
-                </div>
-              </div>
-              <!-- row 4: STUDY only -->
-              <div class="flex items-center" x-show="searchLevel === 'STUDY'">
-                <div class="flex-1 px-1.5 py-0.5">
-                  <select class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" disabled><option x-text="searchTags[4]"></option></select>
-                </div>
-                <div class="flex-1 px-1.5 py-0.5">
-                  <input type="text" class="w-full bg-slate-800 border-slate-700/10 rounded px-2 py-1" placeholder="*" x-model="searchKeys[4]" />
                 </div>
               </div>
             </div>
